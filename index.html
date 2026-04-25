@@ -5,9 +5,35 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Begrebsforklarer</title>
   
+  <!-- PWA & App Icons -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#0b2e31">
+  <link rel="icon" href="https://fav.farm/✨" />
+  <link rel="apple-touch-icon" href="https://fav.farm/✨">
+  <link rel="manifest" href="data:application/manifest+json;charset=utf-8,%7B%22name%22%3A%22Begrebsforklarer%22%2C%22short_name%22%3A%22Forklarer%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230b2e31%22%2C%22theme_color%22%3A%22%230b2e31%22%2C%22icons%22%3A%5B%7B%22src%22%3A%22data%3Aimage%2Fsvg%2Bxml%2C%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%20100%20100%27%3E%3Ctext%20y%3D%27.9em%27%20font-size%3D%2790%27%3E%E2%9C%A8%3C%2Ftext%3E%3C%2Fsvg%3E%22%2C%22sizes%22%3A%22192x192%22%2C%22type%22%3A%22image%2Fsvg%2Bxml%22%7D%5D%7D">
+
   <!-- Tailwind CSS til styling -->
   <script src="https://cdn.tailwindcss.com"></script>
   
+  <!-- Konfiguration af Tailwind til at understøtte Mørk Tilstand og Petroleum-farver -->
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            petroleum: {
+              700: '#1a5c61', // Lysere til hover og inputs
+              800: '#124246', // Baggrund til kort/bokse
+              900: '#0b2e31', // Hovedbaggrund
+            }
+          }
+        }
+      }
+    }
+  </script>
+
   <!-- React & ReactDOM -->
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -15,17 +41,11 @@
   <!-- Babel til at oversætte JSX i browseren -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
-<body class="bg-slate-50 text-slate-900 font-sans selection:bg-indigo-100 selection:text-indigo-900">
+<body class="font-sans selection:bg-indigo-100 selection:text-indigo-900 dark:selection:bg-petroleum-700 dark:selection:text-white">
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect } = React;
-
-    // ====
-    // URL til din Cloudflare Worker proxy.
-    // Skift denne til din egen Worker-URL fra Cloudflare Dashboard.
-    // ====
-    const WORKER_URL = 'https://dry-glitter-39d8.awmeister.workers.dev/';
+    const { useState, useEffect, useRef } = React;
 
     const KLASSETRIN_LIST = [
       '0.-3. klasse', '4.-6. klasse', '7.-9. klasse', '10. klasse'
@@ -53,6 +73,47 @@
 
     const FAG_LIST = Object.keys(FAG_KLASSETRIN_MAP);
 
+    // Hjælpefunktioner til live-parsing af ufærdig JSON
+    const extractStringField = (str, key) => {
+      const marker = `"${key}"`;
+      const start = str.indexOf(marker);
+      if (start === -1) return "";
+      const colonIndex = str.indexOf(':', start + marker.length);
+      if (colonIndex === -1) return "";
+      let valueStart = str.indexOf('"', colonIndex);
+      if (valueStart === -1) return "";
+      valueStart += 1;
+
+      let valueEnd = valueStart;
+      let isEscaped = false;
+      while (valueEnd < str.length) {
+        if (str[valueEnd] === '\\') {
+          isEscaped = !isEscaped;
+        } else if (str[valueEnd] === '"' && !isEscaped) {
+          break;
+        } else {
+          isEscaped = false;
+        }
+        valueEnd++;
+      }
+      return str.substring(valueStart, valueEnd).replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    };
+
+    const extractNumberField = (str, key) => {
+      const marker = `"${key}"`;
+      const start = str.indexOf(marker);
+      if (start === -1) return null;
+      const colonIndex = str.indexOf(':', start + marker.length);
+      if (colonIndex === -1) return null;
+      let valStart = colonIndex + 1;
+      while (valStart < str.length && /\s/.test(str[valStart])) valStart++;
+      if (valStart >= str.length) return null;
+      let valEnd = valStart;
+      while (valEnd < str.length && /[0-9]/.test(str[valEnd])) valEnd++;
+      const numStr = str.substring(valStart, valEnd);
+      return numStr ? parseInt(numStr, 10) : null;
+    };
+
     function App() {
       const [begreb, setBegreb] = useState('');
       const [fag, setFag] = useState(FAG_LIST[0]);
@@ -61,6 +122,36 @@
       const [isLoading, setIsLoading] = useState(false);
       const [result, setResult] = useState(null);
       const [error, setError] = useState('');
+      
+      // Miniquiz state
+      const [selectedAnswer, setSelectedAnswer] = useState(null);
+      
+      // Oplæsning state
+      const [speakingKey, setSpeakingKey] = useState(null);
+
+      // Nye features state
+      const [isDyslexicMode, setIsDyslexicMode] = useState(false);
+      
+      // Mørk tilstand state
+      const [isDarkMode, setIsDarkMode] = useState(() => {
+        const saved = localStorage.getItem('begrebsforklarer_darkmode');
+        return saved ? JSON.parse(saved) : true;
+      });
+
+      const [copyStatus, setCopyStatus] = useState('');
+      const [infografikCopyStatus, setInfografikCopyStatus] = useState('');
+      const [showInfographicModal, setShowInfographicModal] = useState(false);
+      
+      // Spørg om mere state
+      const [followUpQuestion, setFollowUpQuestion] = useState('');
+      const [followUpAnswer, setFollowUpAnswer] = useState('');
+      const [isFollowingUp, setIsFollowingUp] = useState(false);
+
+      // Info modal state
+      const [infoModal, setInfoModal] = useState(null);
+
+      // Genskriv (rewrite) specifik sektion state
+      const [rewritingSection, setRewritingSection] = useState(null);
 
       const [history, setHistory] = useState(() => {
         const saved = localStorage.getItem('begrebsforklarer_history');
@@ -68,9 +159,44 @@
       });
       const [searchQuery, setSearchQuery] = useState('');
 
+      // Auto-load fra URL-parametre
+      const isInitialMount = useRef(true);
+      useEffect(() => {
+        if (isInitialMount.current) {
+          isInitialMount.current = false;
+          const params = new URLSearchParams(window.location.search);
+          const urlBegreb = params.get('begreb');
+          const urlFag = params.get('fag');
+          const urlKlassetrin = params.get('klassetrin');
+
+          let initialFag = FAG_LIST[0];
+          let initialKlassetrin = FAG_KLASSETRIN_MAP[FAG_LIST[0]][0];
+
+          if (urlFag && FAG_LIST.includes(urlFag)) initialFag = urlFag;
+          if (urlKlassetrin) initialKlassetrin = urlKlassetrin;
+
+          if (urlBegreb) {
+            setBegreb(urlBegreb);
+            setFag(initialFag);
+            setKlassetrin(initialKlassetrin);
+            generateExplanation(urlBegreb, false, initialFag, initialKlassetrin);
+          }
+        }
+      }, []);
+
+      useEffect(() => {
+        return () => {
+          if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+        };
+      }, []);
+
       useEffect(() => {
         localStorage.setItem('begrebsforklarer_history', JSON.stringify(history));
       }, [history]);
+
+      useEffect(() => {
+        localStorage.setItem('begrebsforklarer_darkmode', JSON.stringify(isDarkMode));
+      }, [isDarkMode]);
 
       useEffect(() => {
         const availableKlassetrin = FAG_KLASSETRIN_MAP[fag];
@@ -93,68 +219,286 @@
         }
       };
 
-      const filteredHistory = history.filter(item => 
-        item.toLowerCase().includes(searchQuery.toLowerCase())
-      );
+      const handleSpeak = (text, key) => {
+        if (!('speechSynthesis' in window)) {
+          alert("Oplæsning understøttes desværre ikke i din browser.");
+          return;
+        }
+        
+        window.speechSynthesis.cancel(); 
+        
+        if (speakingKey === key) {
+          setSpeakingKey(null);
+          return;
+        }
 
-      const generateExplanation = async (termToExplain) => {
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'da-DK';
+        // Sænk hastigheden lidt ekstra i ordblinde-tilstand
+        utterance.rate = isDyslexicMode ? 0.75 : 0.9; 
+        
+        utterance.onend = () => setSpeakingKey(null);
+        utterance.onerror = () => setSpeakingKey(null);
+        
+        setSpeakingKey(key);
+        window.speechSynthesis.speak(utterance);
+      };
+
+      const handleShareLink = () => {
+        const url = new URL(window.location.href);
+        url.searchParams.set('begreb', begreb);
+        url.searchParams.set('fag', fag);
+        url.searchParams.set('klassetrin', klassetrin);
+        
+        const textArea = document.createElement("textarea");
+        textArea.value = url.toString();
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+          document.execCommand('copy');
+          setCopyStatus('Link kopieret!');
+          setTimeout(() => setCopyStatus(''), 3000);
+        } catch (err) {
+          setCopyStatus('Fejl ved kopiering');
+        }
+        document.body.removeChild(textArea);
+      };
+
+      const handleCopyToWord = () => {
+        if (!result) return;
+        
+        const textToCopy = `
+BEGREB: ${result.ikon ? result.ikon + ' ' : ''}${begreb}
+Fag: ${fag} | Klassetrin: ${klassetrin}
+
+--- FORKLARING ---
+${result.forklaring}
+
+--- EKSEMPEL ---
+${result.eksempel}
+
+--- ANALOGI ---
+${result.analogi}
+
+--- HVORFOR ER DET VIGTIGT? ---
+${result.vigtighed}
+        `.trim();
+
+        // Sikker kopiering (virker også i iframes)
+        const textArea = document.createElement("textarea");
+        textArea.value = textToCopy;
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+          document.execCommand('copy');
+          setCopyStatus('Tekst kopieret!');
+          setTimeout(() => setCopyStatus(''), 3000);
+        } catch (err) {
+          setCopyStatus('Fejl ved kopiering');
+        }
+        document.body.removeChild(textArea);
+      };
+
+      const handleCopyInfografik = () => {
+        if (!result || !result.infografik_prompt) return;
+        const textArea = document.createElement("textarea");
+        textArea.value = result.infografik_prompt;
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+          document.execCommand('copy');
+          setInfografikCopyStatus('Kopieret!');
+          setTimeout(() => setInfografikCopyStatus(''), 3000);
+        } catch (err) {
+          setInfografikCopyStatus('Fejl ved kopiering');
+        }
+        document.body.removeChild(textArea);
+      };
+
+      // Generisk funktion til at læse stream
+      const readStream = async (response, onChunk, onDone) => {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let completeMessage = "";
+        let buffer = "";
+        
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || "";
+          
+          for (const line of lines) {
+            const trimmedLine = line.trim();
+            if (!trimmedLine || trimmedLine === 'data: [DONE]') continue;
+            if (trimmedLine.startsWith('data:')) {
+              try {
+                const data = JSON.parse(trimmedLine.substring(5).trim());
+                if (data.choices && data.choices[0].delta && data.choices[0].delta.content) {
+                  completeMessage += data.choices[0].delta.content;
+                  onChunk(completeMessage);
+                }
+              } catch (e) {}
+            }
+          }
+        }
+        onDone(completeMessage);
+      };
+
+      // Tager nu imod overrides fra URL-loadet
+      const generateExplanation = async (termToExplain, isSimpler = false, overrideFag = null, overrideKlassetrin = null) => {
         if (!termToExplain.trim()) return;
 
         setIsLoading(true);
         setError('');
         setResult(null);
+        setSelectedAnswer(null);
+        setFollowUpAnswer('');
+        setFollowUpQuestion('');
+        if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+        setSpeakingKey(null);
+        
+        const activeFag = overrideFag || fag;
+        const activeKlassetrin = overrideKlassetrin || klassetrin;
         
         try {
-          const response = await fetch(WORKER_URL, {
+          const simplerInstruction = isSimpler 
+            ? "VIGTIGT: Modtageren havde svært ved at forstå den normale forklaring. Gør det NU EKSTRA SIMPELT. Brug meget kortere sætninger, almindelige hverdagsord, og skær helt ind til benet."
+            : "";
+
+          const systemPrompt = `Du er en dygtig og pædagogisk dansk skolelærer. Din opgave er at forklare faglige begreber for elever i folkeskolen på en letforståelig måde.
+          
+REGLER FOR SPROG OG FAKTA:
+- Undgå at hallucinere eller gætte. Hold dig strengt til de faglige fakta.
+- QUIZ REGEL: Det korrekte svar (1, 2 eller 3) SKAL være tilfældigt hver gang.
+          
+${simplerInstruction}
+
+VIGTIGT: Du SKAL svare med et validt JSON-objekt i præcis dette format, og intet andet:
+{
+  "ikon": "1 enkelt emoji der passer perfekt til begrebet",
+  "forklaring": "En letforståelig begrebsforklaring...",
+  "eksempel": "Et konkret eksempel...",
+  "analogi": "En pædagogisk analogi...",
+  "infografik_prompt": "An English prompt for an image AI (like Midjourney or DALL-E) to create an infographic based on the analogy. E.g. 'A flat vector infographic showing...'",
+  "vigtighed": "Hvorfor det er vigtigt at kunne dette...",
+  "quiz_sporgsmal": "Et multiple-choice spørgsmål...",
+  "quiz_svar_1": "Første svarmulighed",
+  "quiz_svar_2": "Anden svarmulighed",
+  "quiz_svar_3": "Tredje svarmulighed",
+  "quiz_korrekt": 1
+}`;
+
+          const userPrompt = `Forklar begreb: "${termToExplain}". Fag: "${activeFag}". Målgruppe: Elev i "${activeKlassetrin}".`;
+
+          const response = await fetch('https://llm.dbc.dk/v1/chat/completions', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer sk-bv73cufkhv7wt5t7zf6' },
             body: JSON.stringify({
-              contents: [{
-                parts: [{
-                  text: `Forklar venligst følgende begreb: "${termToExplain}". Faget er: "${fag}". Målgruppen er en elev i: "${klassetrin}".`
-                }]
-              }],
-              systemInstruction: {
-                parts: [{
-                  text: "Du er en dygtig og pædagogisk dansk skolelærer. Din opgave er at forklare faglige begreber for elever i folkeskolen på en letforståelig måde. Svaret skal være skrevet i et sprog og med eksempler, der passer præcist til det angivne klassetrin og fag."
-                }]
-              },
-              generationConfig: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                  type: "OBJECT",
-                  properties: {
-                    forklaring: { type: "STRING", description: "En letforståelig begrebsforklaring tilpasset klassetrinnet." },
-                    eksempel: { type: "STRING", description: "Et konkret eksempel på anvendelse af begrebet." },
-                    analogi: { type: "STRING", description: "En pædagogisk analogi, der gør begrebet lettere at forstå." },
-                    vigtighed: { type: "STRING", description: "En kort forklaring af, hvorfor det er vigtigt at kunne dette begreb." }
-                  },
-                  required: ["forklaring", "eksempel", "analogi", "vigtighed"]
-                }
-              }
+              model: "skolegpt-v3",
+              messages: [ { role: "system", content: systemPrompt }, { role: "user", content: userPrompt } ],
+              stream: true,
+              temperature: 0.2,
+              top_p: 0.9
             })
           });
 
-          const data = await response.json();
+          if (!response.ok) throw new Error(`Serverfejl: ${response.status}`);
 
-          if (data.error) {
-            throw new Error(data.error.message);
-          }
+          await readStream(response, (completeMessage) => {
+             setResult({
+                ikon: extractStringField(completeMessage, "ikon"),
+                forklaring: extractStringField(completeMessage, "forklaring"),
+                eksempel: extractStringField(completeMessage, "eksempel"),
+                analogi: extractStringField(completeMessage, "analogi"),
+                infografik_prompt: extractStringField(completeMessage, "infografik_prompt"),
+                vigtighed: extractStringField(completeMessage, "vigtighed"),
+                quiz_sporgsmal: extractStringField(completeMessage, "quiz_sporgsmal"),
+                quiz_svar_1: extractStringField(completeMessage, "quiz_svar_1"),
+                quiz_svar_2: extractStringField(completeMessage, "quiz_svar_2"),
+                quiz_svar_3: extractStringField(completeMessage, "quiz_svar_3"),
+                quiz_korrekt: extractNumberField(completeMessage, "quiz_korrekt")
+              });
+          }, (finalMessage) => {
+             try {
+              const jsonMatch = finalMessage.match(/\{[\s\S]*\}/);
+              if(jsonMatch) setResult(JSON.parse(jsonMatch[0]));
+             } catch(e) {}
+          });
+          
+          if (!isSimpler) addToHistory(termToExplain);
 
-          if (data.candidates && data.candidates[0].content.parts[0].text) {
-            const parsedResult = JSON.parse(data.candidates[0].content.parts[0].text);
-            setResult(parsedResult);
-            addToHistory(termToExplain);
-          } else {
-            setError('Kunne ikke generere et svar. Prøv igen.');
-          }
         } catch (err) {
-          console.error(err);
           setError('Der opstod en fejl: ' + err.message);
         } finally {
           setIsLoading(false);
+        }
+      };
+
+      const handleRewriteSection = async (sectionKey, promptLabel) => {
+        setRewritingSection(sectionKey);
+        try {
+          const systemPrompt = "Du er en pædagogisk skolelærer. Din opgave er KUN at omskrive en lille del af en begrebsforklaring, så eleven får en NY vinkel. Svar KUN med den nye tekst - absolut ingen formatering, ingen markdown, intet JSON, kun den rene tekst.";
+          const userPrompt = `Vi taler om begrebet "${begreb}" (${fag}, ${klassetrin}). Skriv en NY, KORT og ANDERLEDES version af denne sektion: '${promptLabel}'. Den tidligere tekst var: "${result[sectionKey]}". Skriv den nye version nu:`;
+
+          const response = await fetch('https://llm.dbc.dk/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer sk-bv73cufkhv7wt5t7zf6' },
+            body: JSON.stringify({
+              model: "skolegpt-v3",
+              messages: [ { role: "system", content: systemPrompt }, { role: "user", content: userPrompt } ],
+              stream: true,
+              temperature: 0.7 // Lidt mere kreativ her for at sikre variation
+            })
+          });
+
+          if (!response.ok) throw new Error(`Serverfejl`);
+
+          let newTextBuffer = "";
+          await readStream(response, (chunk) => {
+             setResult(prev => ({ ...prev, [sectionKey]: chunk }));
+          }, () => {});
+
+        } catch(err) {
+          console.error(err);
+        } finally {
+          setRewritingSection(null);
+        }
+      };
+
+      const handleFollowUpSubmit = async (e) => {
+        e.preventDefault();
+        if(!followUpQuestion.trim()) return;
+        
+        setIsFollowingUp(true);
+        setFollowUpAnswer('');
+
+        try {
+          const systemPrompt = "Du er en pædagogisk skolelærer. Svar kort, direkte og i øjenhøjde på elevens spørgsmål baseret på den igangværende samtale.";
+          const userPrompt = `Kontekst: Vi har lige lært om begrebet "${begreb}" i ${fag}. Eleven spørger: "${followUpQuestion}". Svar på spørgsmålet:`;
+
+          const response = await fetch('https://llm.dbc.dk/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer sk-bv73cufkhv7wt5t7zf6' },
+            body: JSON.stringify({
+              model: "skolegpt-v3",
+              messages: [ { role: "system", content: systemPrompt }, { role: "user", content: userPrompt } ],
+              stream: true,
+              temperature: 0.4
+            })
+          });
+
+          await readStream(response, (chunk) => {
+             setFollowUpAnswer(chunk);
+          }, () => {});
+
+        } catch (err) {
+           setFollowUpAnswer("Beklager, der opstod en fejl. Prøv at spørge igen.");
+        } finally {
+          setIsFollowingUp(false);
+          setFollowUpQuestion('');
         }
       };
 
@@ -168,248 +512,436 @@
         generateExplanation(term);
       };
 
+      const filteredHistory = history.filter(item => 
+        item.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+
       const availableKlassetrinForFag = FAG_KLASSETRIN_MAP[fag] || KLASSETRIN_LIST;
 
+      // Baggrundsklasser
+      let bgClass = 'bg-slate-50 text-slate-900';
+      if (isDarkMode) bgClass = 'bg-petroleum-900 text-slate-100';
+      else if (isDyslexicMode) bgClass = 'bg-[#fdfbf7] text-slate-900';
+
+      // Dynamiske CSS-klasser baseret på tilstande
+      const wrapperClasses = `${isDarkMode ? 'dark' : ''} min-h-screen transition-all duration-300 print:bg-white print:min-h-0 flex flex-col ${bgClass} ${
+        isDyslexicMode ? 'font-sans tracking-[0.05em] leading-[2.2] text-[1.05rem]' : ''
+      }`;
+
       return (
-        <div className="min-h-screen bg-slate-50 text-slate-900 font-sans selection:bg-indigo-100 selection:text-indigo-900">
-          <div className="max-w-6xl mx-auto px-4 py-12 sm:px-6 lg:px-8">
+        <div className={wrapperClasses}>
+          <div className="flex-grow max-w-6xl w-full mx-auto px-4 py-8 sm:py-12 sm:px-6 lg:px-8 print:p-0 print:m-0 transition-colors duration-300">
             
-            {/* Header */}
-            <div className="text-center mb-12">
-              <div className="inline-flex items-center justify-center p-3 bg-indigo-100 rounded-2xl mb-4 text-indigo-600 text-2xl">
-                ✨
-              </div>
-              <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl mb-4">
+            {/* Header Toggles */}
+            <div className="flex flex-wrap justify-end gap-3 mb-6 print:hidden">
+              <button 
+                onClick={() => setIsDarkMode(!isDarkMode)}
+                className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+                  isDarkMode ? 'bg-petroleum-800 text-amber-300 border border-petroleum-700 hover:bg-petroleum-700' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                }`}
+                title="Skift mellem lys og mørk tilstand"
+              >
+                <span className="text-lg">{isDarkMode ? '🌙' : '☀️'}</span> 
+                {isDarkMode ? 'Mørk tilstand' : 'Lys tilstand'}
+              </button>
+
+              <button 
+                onClick={() => setIsDyslexicMode(!isDyslexicMode)}
+                className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+                  isDyslexicMode 
+                    ? 'bg-amber-100 text-amber-800 ring-2 ring-amber-400 dark:bg-petroleum-700 dark:text-amber-300 dark:ring-petroleum-700' 
+                    : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100 dark:bg-petroleum-800 dark:border-petroleum-700 dark:text-slate-300 dark:hover:bg-petroleum-700'
+                }`}
+                title="Ordblinde-venlig tilstand med større afstand og lavere læsehastighed"
+              >
+                <span className="text-lg">👁️</span> 
+                {isDyslexicMode ? 'Ordblinde-tilstand: TIL' : 'Ordblinde-tilstand'}
+              </button>
+            </div>
+
+            <div className="text-center mb-10 print:mb-6">
+              <h1 className="text-4xl font-bold tracking-tight text-slate-900 dark:text-white sm:text-5xl mb-4 transition-colors">
                 Begrebsforklarer
               </h1>
-              <p className="text-lg text-slate-600 max-w-2xl mx-auto">
-                Få faglige begreber gjort lette at forstå med pædagogiske forklaringer, eksempler og analogier. Og forstå hvorfor begrebet er vigtigt at forstå.
+              <p className="text-lg text-slate-600 dark:text-slate-300 max-w-2xl mx-auto print:hidden transition-colors">
+                Få faglige begreber gjort lette at forstå med pædagogiske forklaringer, eksempler og analogier. Test dig selv med en miniquiz!
               </p>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 print:block">
               
               {/* Left Column: Form & History */}
-              <div className="lg:col-span-4 space-y-6">
+              <div className="lg:col-span-4 space-y-6 print:hidden">
                 
-                {/* Form Section */}
-                <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
+                <div className="bg-white dark:bg-petroleum-800 rounded-3xl shadow-sm border border-slate-200 dark:border-petroleum-700 p-6 transition-colors">
                   <form onSubmit={handleGenerate} className="space-y-5">
-                    
                     <div>
-                    <label htmlFor="begreb" className="block text-sm font-semibold text-slate-900 mb-2">
-                    Begreb eller sætning
-                    </label>
-                    <input
-                    type="text"
-                    id="begreb"
-                    value={begreb}
-                    onChange={(e) => setBegreb(e.target.value)}
-                    placeholder="F.eks. Fotosyntese, Demokrati..."
-                    className="w-full px-4 py-3 rounded-xl border border-slate-300 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
-                    required
-                    />
+                      <label htmlFor="begreb" className="block text-sm font-semibold text-slate-900 dark:text-slate-200 mb-2">Begreb eller sætning</label>
+                      <input
+                        type="text" id="begreb" value={begreb} onChange={(e) => setBegreb(e.target.value)}
+                        placeholder="F.eks. Fotosyntese, Demokrati..."
+                        className="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-petroleum-700 bg-slate-50 dark:bg-petroleum-900 focus:bg-white dark:focus:bg-petroleum-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 transition-colors"
+                        required
+                      />
                     </div>
-
                     <div>
-                    <label htmlFor="fag" className="block text-sm font-semibold text-slate-900 mb-2">
-                    Fag
-                    </label>
-                    <div className="relative">
-                    <select
-                    id="fag"
-                    value={fag}
-                    onChange={(e) => setFag(e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-300 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 appearance-none transition-colors"
-                    >
-                    {FAG_LIST.map(f => (
-                    <option key={f} value={f}>{f}</option>
-                    ))}
-                    </select>
-                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">📚</span>
+                      <label htmlFor="fag" className="block text-sm font-semibold text-slate-900 dark:text-slate-200 mb-2">Fag</label>
+                      <div className="relative">
+                        <select
+                          id="fag" value={fag} onChange={(e) => setFag(e.target.value)}
+                          className="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-petroleum-700 bg-slate-50 dark:bg-petroleum-900 focus:bg-white dark:focus:bg-petroleum-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 appearance-none transition-colors"
+                        >
+                          {FAG_LIST.map(f => <option key={f} value={f}>{f}</option>)}
+                        </select>
+                      </div>
                     </div>
-                    </div>
-
                     <div>
-                    <label htmlFor="klassetrin" className="block text-sm font-semibold text-slate-900 mb-2">
-                    Klassetrin
-                    </label>
-                    <div className="relative">
-                    <select
-                    id="klassetrin"
-                    value={klassetrin}
-                    onChange={(e) => setKlassetrin(e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-300 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 appearance-none transition-colors"
-                    >
-                    {availableKlassetrinForFag.map(k => (
-                    <option key={k} value={k}>{k}</option>
-                    ))}
-                    </select>
-                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">🎓</span>
+                      <label htmlFor="klassetrin" className="block text-sm font-semibold text-slate-900 dark:text-slate-200 mb-2">Klassetrin</label>
+                      <div className="relative">
+                        <select
+                          id="klassetrin" value={klassetrin} onChange={(e) => setKlassetrin(e.target.value)}
+                          className="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-petroleum-700 bg-slate-50 dark:bg-petroleum-900 focus:bg-white dark:focus:bg-petroleum-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 appearance-none transition-colors"
+                        >
+                          {availableKlassetrinForFag.map(k => <option key={k} value={k}>{k}</option>)}
+                        </select>
+                      </div>
                     </div>
-                    </div>
-
                     <button
-                    type="submit"
-                    disabled={isLoading || !begreb.trim()}
-                    className="w-full py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold shadow-sm transition-all focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      type="submit" disabled={isLoading || !begreb.trim()}
+                      className="w-full py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold shadow-sm transition-all focus:ring-2 disabled:opacity-70 flex justify-center gap-2"
                     >
-                    {isLoading ? (
-                    <>⏳ Genererer...</>
-                    ) : (
-                    <>✨ Forklar begreb</>
-                    )}
+                      {isLoading ? <>⏳ Skriver...</> : <>✨ Forklar begreb</>}
                     </button>
                   </form>
                 </div>
 
-                {/* History Section */}
-                <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 flex flex-col max-h-[500px]">
+                <div className="bg-white dark:bg-petroleum-800 rounded-3xl shadow-sm border border-slate-200 dark:border-petroleum-700 p-6 flex flex-col max-h-[400px] transition-colors">
                   <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                    ⏱️ Tidligere begreber
-                    </h3>
-                    {history.length > 0 && (
-                    <button 
-                    onClick={clearHistory}
-                    className="text-slate-400 hover:text-red-500 transition-colors p-1 rounded-md hover:bg-red-50"
-                    title="Ryd historik"
-                    >
-                    🗑️
-                    </button>
-                    )}
+                    <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">Historik</h3>
+                    {history.length > 0 && <button onClick={clearHistory} className="text-slate-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 p-1 rounded-md hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors">🗑️</button>}
                   </div>
-
                   {history.length > 0 ? (
                     <>
-                    <div className="relative mb-4">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">🔍</span>
-                    <input
-                    type="text"
-                    placeholder="Søg i historik..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full pl-9 pr-4 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
-                    />
-                    </div>
-                    
-                    <div className="overflow-y-auto pr-2 space-y-2 flex-grow">
-                    {filteredHistory.length > 0 ? (
-                    filteredHistory.map((item, idx) => (
-                    <button
-                    key={idx}
-                    onClick={() => handleHistoryClick(item)}
-                    className="w-full text-left px-4 py-3 rounded-xl border border-slate-100 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-100 hover:text-indigo-700 transition-colors flex items-center justify-between group"
-                    >
-                    <span className="font-medium truncate pr-2">{item}</span>
-                    <span className="text-slate-300 group-hover:text-indigo-400 shrink-0">➡️</span>
-                    </button>
-                    ))
-                    ) : (
-                    <p className="text-sm text-slate-500 text-center py-4">Ingen resultater fundet.</p>
-                    )}
-                    </div>
+                      <input type="text" placeholder="Søg i historik..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full px-4 py-2 mb-4 text-sm rounded-lg border border-slate-200 dark:border-petroleum-700 bg-slate-50 dark:bg-petroleum-900 text-slate-900 dark:text-white transition-colors" />
+                      <div className="overflow-y-auto pr-2 space-y-2 flex-grow">
+                        {filteredHistory.map((item, idx) => (
+                          <button key={idx} onClick={() => handleHistoryClick(item)} className="w-full text-left px-4 py-3 rounded-xl border border-slate-100 dark:border-petroleum-700 bg-slate-50 dark:bg-petroleum-900 hover:bg-indigo-50 dark:hover:bg-petroleum-700 text-slate-900 dark:text-slate-200 flex justify-between group transition-colors">
+                            <span className="font-medium truncate pr-2">{item}</span>
+                            <span className="text-slate-300 dark:text-slate-500 group-hover:text-indigo-400 dark:group-hover:text-indigo-400">➡️</span>
+                          </button>
+                        ))}
+                      </div>
                     </>
-                  ) : (
-                    <div className="text-center py-8 text-slate-500">
-                    <p className="text-sm">Du har ikke søgt på nogen begreber endnu.</p>
-                    </div>
-                  )}
+                  ) : <p className="text-sm text-slate-500 dark:text-slate-400 text-center py-4">Ingen historik endnu.</p>}
                 </div>
               </div>
 
               {/* Right Column: Result Section */}
-              <div className="lg:col-span-8">
-                {error && (
-                  <div className="bg-red-50 text-red-700 p-4 rounded-2xl border border-red-200 mb-6">
-                    {error}
-                  </div>
-                )}
+              <div className="lg:col-span-8 print:col-span-12 print:block">
+                {error && <div className="bg-red-50 dark:bg-red-900/40 text-red-700 dark:text-red-300 p-4 rounded-2xl border border-red-200 dark:border-red-800/50 mb-6 print:hidden transition-colors">{error}</div>}
 
                 {!result && !isLoading && !error && (
-                  <div className="h-full min-h-[400px] bg-white rounded-3xl border border-slate-200 border-dashed flex flex-col items-center justify-center p-8 text-center text-slate-500">
-                    <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4 text-3xl">
-                    📖
-                    </div>
-                    <h3 className="text-lg font-medium text-slate-900 mb-2">Klar til at forklare</h3>
-                    <p className="max-w-sm">
-                    Indtast et begreb, vælg fag og klassetrin, og få en skræddersyet pædagogisk forklaring.
-                    </p>
+                  <div className="h-full min-h-[400px] bg-white dark:bg-petroleum-800 rounded-3xl border border-slate-200 dark:border-petroleum-700 border-dashed flex flex-col items-center justify-center p-8 text-center text-slate-500 dark:text-slate-400 print:hidden transition-colors">
+                    <h3 className="text-lg font-medium text-slate-900 dark:text-slate-200 mb-2">Klar til at forklare</h3>
+                    <p className="max-w-sm">Indtast et begreb til venstre, og få en skræddersyet forklaring.</p>
                   </div>
                 )}
 
-                {isLoading && (
-                  <div className="h-full min-h-[400px] bg-white rounded-3xl border border-slate-200 flex flex-col items-center justify-center p-8 text-center">
-                    <div className="text-4xl animate-spin mb-4">⏳</div>
-                    <h3 className="text-lg font-medium text-slate-900 mb-2">Tænker...</h3>
-                    <p className="text-slate-500">Forbereder den bedste forklaring til {klassetrin}...</p>
-                  </div>
-                )}
-
-                {result && !isLoading && (
-                  <div className="space-y-6">
+                {result && (
+                  <div className="space-y-6 print:space-y-4">
                     
-                    {/* Forklaring */}
-                    <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 sm:p-8 relative overflow-hidden">
-                    <div className="absolute top-0 left-0 w-2 h-full bg-blue-500"></div>
-                    <div className="flex items-start gap-4">
-                    <div className="p-3 bg-blue-50 text-blue-600 rounded-xl shrink-0 text-xl">
-                    📖
-                    </div>
-                    <div>
-                    <h3 className="text-lg font-bold text-slate-900 mb-2">Begrebsforklaring</h3>
-                    <p className="text-slate-700 leading-relaxed">{result.forklaring}</p>
-                    </div>
-                    </div>
+                    {/* Hovedoverskrift med Ikon */}
+                    {result.ikon && !isLoading && (
+                      <h2 className="text-3xl font-bold text-slate-800 dark:text-white mb-2 flex items-center gap-3 print:hidden transition-colors">
+                        <span className="text-4xl">{result.ikon}</span> {begreb}
+                      </h2>
+                    )}
+
+                    {/* Action Bar (Print, Kopier & Simpler) */}
+                    <div className="flex flex-wrap justify-between items-center bg-white dark:bg-petroleum-800 p-2 rounded-2xl border border-slate-200 dark:border-petroleum-700 shadow-sm gap-2 print:hidden transition-colors">
+                      <div className="flex flex-wrap gap-2">
+                        <button onClick={() => window.print()} className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-petroleum-700 rounded-xl transition-colors flex items-center gap-2">
+                          🖨️ Print / PDF
+                        </button>
+                        <button onClick={handleShareLink} className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-petroleum-700 rounded-xl transition-colors flex items-center gap-2">
+                          🔗 {copyStatus === 'Link kopieret!' ? copyStatus : 'Del link'}
+                        </button>
+                        <button onClick={handleCopyToWord} className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-petroleum-700 rounded-xl transition-colors flex items-center gap-2">
+                          📋 {copyStatus === 'Tekst kopieret!' ? copyStatus : 'Kopiér til Word'}
+                        </button>
+                      </div>
+                      <button onClick={() => generateExplanation(begreb, true)} disabled={isLoading} className="px-4 py-2 text-sm font-medium text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 hover:bg-amber-100 dark:hover:bg-amber-900/50 rounded-xl transition-colors flex items-center gap-2">
+                        ❓ Var alt for svært? Gør det meget simplere
+                      </button>
                     </div>
 
-                    {/* Eksempel */}
-                    <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 sm:p-8 relative overflow-hidden">
-                    <div className="absolute top-0 left-0 w-2 h-full bg-emerald-500"></div>
-                    <div className="flex items-start gap-4">
-                    <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl shrink-0 text-xl">
-                    💡
-                    </div>
-                    <div>
-                    <h3 className="text-lg font-bold text-slate-900 mb-2">Eksempel</h3>
-                    <p className="text-slate-700 leading-relaxed">{result.eksempel}</p>
-                    </div>
-                    </div>
+                    <div className="hidden print:block text-slate-500 mb-6 border-b pb-4">
+                      <p><strong>Begreb:</strong> {result.ikon} {begreb}</p>
+                      <p><strong>Fag:</strong> {fag}</p>
+                      <p><strong>Målgruppe:</strong> {klassetrin}</p>
                     </div>
 
-                    {/* Analogi */}
-                    <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 sm:p-8 relative overflow-hidden">
-                    <div className="absolute top-0 left-0 w-2 h-full bg-amber-500"></div>
-                    <div className="flex items-start gap-4">
-                    <div className="p-3 bg-amber-50 text-amber-600 rounded-xl shrink-0 text-xl">
-                    🔄
-                    </div>
-                    <div>
-                    <h3 className="text-lg font-bold text-slate-900 mb-2">Analogi</h3>
-                    <p className="text-slate-700 leading-relaxed">{result.analogi}</p>
-                    </div>
-                    </div>
-                    </div>
+                    {/* Reusable Section Component */}
+                    {['forklaring', 'eksempel', 'analogi', 'vigtighed'].map((key) => {
+                      if (!result[key]) return null;
+                      
+                      const sectionData = {
+                        'forklaring': { title: 'Begrebsforklaring', color: 'blue', darkBg: 'dark:bg-blue-900/20', darkText: 'dark:text-blue-400' },
+                        'eksempel': { title: 'Eksempel', color: 'emerald', darkBg: 'dark:bg-emerald-900/20', darkText: 'dark:text-emerald-400' },
+                        'analogi': { title: 'Analogi', color: 'amber', darkBg: 'dark:bg-amber-900/20', darkText: 'dark:text-amber-400' },
+                        'vigtighed': { title: 'Hvorfor er det vigtigt?', color: 'purple', darkBg: 'dark:bg-purple-900/20', darkText: 'dark:text-purple-400' }
+                      }[key];
 
-                    {/* Vigtighed */}
-                    <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 sm:p-8 relative overflow-hidden">
-                    <div className="absolute top-0 left-0 w-2 h-full bg-purple-500"></div>
-                    <div className="flex items-start gap-4">
-                    <div className="p-3 bg-purple-50 text-purple-600 rounded-xl shrink-0 text-xl">
-                    🎯
-                    </div>
-                    <div>
-                    <h3 className="text-lg font-bold text-slate-900 mb-2">Hvorfor er det vigtigt?</h3>
-                    <p className="text-slate-700 leading-relaxed">{result.vigtighed}</p>
-                    </div>
-                    </div>
-                    </div>
+                      return (
+                        <div key={key} className={`bg-white dark:bg-petroleum-800 rounded-3xl shadow-sm border border-slate-200 dark:border-petroleum-700 p-6 relative overflow-hidden transition-colors print:shadow-none print:border-b print:rounded-none print:break-inside-avoid print:px-0 print:py-4 ${rewritingSection === key ? 'opacity-70 animate-pulse' : ''}`}>
+                          <div className={`absolute top-0 left-0 w-2 h-full bg-${sectionData.color}-500 print:hidden`}></div>
+                          <div className="flex items-start gap-4">
+                            <div className="flex-grow">
+                              <div className="flex justify-between items-center mb-2">
+                                <h3 className="text-lg font-bold text-slate-900 dark:text-white transition-colors">{sectionData.title}</h3>
+                                <div className="flex gap-1 print:hidden">
+                                  {key === 'analogi' && result.infografik_prompt && (
+                                    <button onClick={() => setShowInfographicModal(true)} className="text-sm font-medium px-3 py-1 text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-petroleum-700 rounded-lg flex items-center gap-1 transition-colors" title="Lav en infografik">
+                                      🖼️ Infografik
+                                    </button>
+                                  )}
+                                  <button onClick={() => handleRewriteSection(key, sectionData.title)} disabled={rewritingSection !== null} className="text-sm font-medium px-3 py-1 text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-petroleum-700 rounded-lg flex items-center gap-1 transition-colors" title="Forklar på en anden måde">
+                                    🔄 Ny
+                                  </button>
+                                  <button onClick={() => handleSpeak(result[key], key)} className="text-xl p-1 hover:scale-110 transition-transform dark:opacity-80 dark:hover:opacity-100" title="Læs op">
+                                    {speakingKey === key ? '⏹️' : '🔊'}
+                                  </button>
+                                </div>
+                              </div>
+                              <p className="text-slate-700 dark:text-slate-300 whitespace-pre-wrap transition-colors">{result[key]}</p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {/* Miniquiz */}
+                    {result.quiz_sporgsmal && (
+                      <div className="bg-indigo-50/50 dark:bg-petroleum-800 rounded-3xl border border-indigo-100 dark:border-petroleum-700 p-6 relative overflow-hidden print:hidden transition-colors">
+                        <div className="flex items-start gap-4">
+                          <div className="flex-grow w-full">
+                            <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2 transition-colors">Test dig selv: Miniquiz</h3>
+                            <p className="text-slate-800 dark:text-slate-200 font-medium mb-4 transition-colors">{result.quiz_sporgsmal}</p>
+                            
+                            <div className="space-y-3">
+                              {[1, 2, 3].map((num) => {
+                                const svarTekst = result[`quiz_svar_${num}`];
+                                if (!svarTekst) return null;
+                                
+                                const isSelected = selectedAnswer === num;
+                                const isCorrect = result.quiz_korrekt === num;
+                                const showResult = selectedAnswer !== null;
+                                
+                                let btnClass = "w-full text-left px-4 py-3 rounded-xl border transition-all ";
+                                if (!showResult) btnClass += "bg-white dark:bg-petroleum-900 border-slate-200 dark:border-petroleum-700 hover:border-indigo-400 dark:hover:border-indigo-500 hover:bg-indigo-50 dark:hover:bg-petroleum-700 text-slate-900 dark:text-slate-200";
+                                else if (isCorrect) btnClass += "bg-emerald-100 dark:bg-emerald-900/40 border-emerald-400 dark:border-emerald-500 text-emerald-900 dark:text-emerald-300 font-medium";
+                                else if (isSelected && !isCorrect) btnClass += "bg-red-100 dark:bg-red-900/40 border-red-400 dark:border-red-500 text-red-900 dark:text-red-300";
+                                else btnClass += "bg-slate-50 dark:bg-petroleum-900/50 border-slate-200 dark:border-petroleum-800 text-slate-400 dark:text-slate-500 opacity-60";
+
+                                return (
+                                  <button key={num} onClick={() => !showResult && setSelectedAnswer(num)} disabled={showResult} className={btnClass}>
+                                    <div className="flex items-center gap-3">
+                                      <span className="shrink-0 w-6 h-6 rounded-full bg-black/5 dark:bg-white/10 flex items-center justify-center text-sm font-bold">{['A', 'B', 'C'][num-1]}</span>
+                                      <span>{svarTekst}</span>
+                                      {showResult && isCorrect && <span className="ml-auto text-xl">✅</span>}
+                                      {showResult && isSelected && !isCorrect && <span className="ml-auto text-xl">❌</span>}
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            {selectedAnswer !== null && (
+                              <div className="mt-4 text-center transition-colors">
+                                {selectedAnswer === result.quiz_korrekt ? <p className="text-emerald-600 dark:text-emerald-400 font-bold">Flot klaret! 🎉</p> : <p className="text-red-500 dark:text-red-400 font-medium">Det var ikke helt rigtigt. Læs forklaringen en gang til.</p>}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Spørg om mere (Chat) */}
+                    {!isLoading && result.forklaring && (
+                      <div className="bg-slate-100 dark:bg-petroleum-900/50 rounded-3xl border border-slate-200 dark:border-petroleum-700 p-6 print:hidden transition-colors">
+                        <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2 transition-colors">Spørg om mere</h3>
+                        <p className="text-sm text-slate-600 dark:text-slate-400 mb-4 transition-colors">Er der et ord du ikke forstår, eller vil du vide mere om {begreb}?</p>
+                        
+                        {followUpAnswer && (
+                          <div className="mb-4 p-4 bg-white dark:bg-petroleum-800 rounded-2xl border border-slate-200 dark:border-petroleum-700 text-slate-700 dark:text-slate-300 whitespace-pre-wrap transition-colors">
+                            <span className="font-bold block mb-1">Lærerens svar:</span>
+                            {followUpAnswer}
+                          </div>
+                        )}
+
+                        <form onSubmit={handleFollowUpSubmit} className="flex gap-2 relative">
+                          <input 
+                            type="text" 
+                            value={followUpQuestion} 
+                            onChange={(e) => setFollowUpQuestion(e.target.value)}
+                            placeholder="Stil et spørgsmål her..." 
+                            className="flex-grow px-4 py-3 rounded-xl border border-slate-300 dark:border-petroleum-700 bg-white dark:bg-petroleum-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 transition-colors"
+                            disabled={isFollowingUp}
+                          />
+                          
+                          <button 
+                            type="submit" 
+                            disabled={isFollowingUp || !followUpQuestion.trim()}
+                            className="px-6 py-3 bg-slate-800 dark:bg-indigo-600 text-white rounded-xl hover:bg-slate-900 dark:hover:bg-indigo-700 transition-colors disabled:opacity-50"
+                          >
+                            {isFollowingUp ? 'Tænker...' : 'Spørg'}
+                          </button>
+                        </form>
+                      </div>
+                    )}
 
                   </div>
                 )}
               </div>
             </div>
+            
+            {/* Footer med infoknapper */}
+            <div className="mt-16 pt-8 border-t border-slate-200 dark:border-petroleum-700 print:hidden text-center transition-colors">
+              <h3 className="text-slate-500 dark:text-slate-400 font-medium mb-4">Læs mere om, hvordan du bruger tjenesten:</h3>
+              <div className="flex flex-wrap justify-center gap-3">
+                <button onClick={() => setInfoModal('elev')} className="px-5 py-2.5 bg-white dark:bg-petroleum-800 border border-slate-300 dark:border-petroleum-700 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-indigo-50 dark:hover:bg-petroleum-700 hover:text-indigo-700 dark:hover:text-indigo-300 hover:border-indigo-300 transition-all font-medium">
+                  For elever
+                </button>
+                <button onClick={() => setInfoModal('forælder')} className="px-5 py-2.5 bg-white dark:bg-petroleum-800 border border-slate-300 dark:border-petroleum-700 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-indigo-50 dark:hover:bg-petroleum-700 hover:text-indigo-700 dark:hover:text-indigo-300 hover:border-indigo-300 transition-all font-medium">
+                  For forældre
+                </button>
+                <button onClick={() => setInfoModal('lærer')} className="px-5 py-2.5 bg-white dark:bg-petroleum-800 border border-slate-300 dark:border-petroleum-700 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-indigo-50 dark:hover:bg-petroleum-700 hover:text-indigo-700 dark:hover:text-indigo-300 hover:border-indigo-300 transition-all font-medium">
+                  For lærere
+                </button>
+              </div>
+              <div className="mt-8 text-sm text-slate-400 dark:text-slate-500 transition-colors">
+                Udviklet af Anders Westermann - <a href="https://futurisme.dk" target="_blank" rel="noopener noreferrer" className="text-indigo-500 dark:text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-300 hover:underline transition-colors">Futurisme.dk</a>
+              </div>
+            </div>
           </div>
+
+          {/* Info Modal */}
+          {infoModal && (
+            <div className="fixed inset-0 bg-slate-900/40 dark:bg-slate-900/70 backdrop-blur-sm flex items-center justify-center z-50 p-4 print:hidden transition-colors" onClick={() => setInfoModal(null)}>
+              <div className="bg-white dark:bg-petroleum-800 rounded-3xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col transition-colors" onClick={e => e.stopPropagation()}>
+                <div className="p-6 border-b border-slate-100 dark:border-petroleum-700 flex justify-between items-center bg-slate-50/50 dark:bg-petroleum-900/50 transition-colors">
+                  <h3 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    {infoModal === 'elev' && '👦 For dig som er elev'}
+                    {infoModal === 'forælder' && '👨‍👩‍👧 For jer som er forældre'}
+                    {infoModal === 'lærer' && '👩‍🏫 For dig som er lærer'}
+                  </h3>
+                  <button onClick={() => setInfoModal(null)} className="text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 p-2 rounded-full hover:bg-slate-100 dark:hover:bg-petroleum-700 transition-colors">
+                    ❌
+                  </button>
+                </div>
+                <div className="p-6 overflow-y-auto max-h-[80vh] text-slate-700 dark:text-slate-300 space-y-4 transition-colors">
+                  {infoModal === 'elev' && (
+                    <>
+                      <p className="text-lg font-medium text-indigo-600 dark:text-indigo-400">Kender du det, når læreren siger et svært ord i timen?</p>
+                      <p>Du tænker måske: "Hvad betyder det overhovedet?". Her kan Begrebsforklareren hjælpe dig! Det er et smart værktøj, som gør svære skoleord nemme at forstå.</p>
+                      <h4 className="font-bold text-slate-900 dark:text-white mt-4">Hvad er målet?</h4>
+                      <p>Målet er at hjælpe dig med lektierne. Det skal være nemt for dig at følge med i skolen. Værktøjet bruger pædagogiske ord, der passer præcis til din alder.</p>
+                      <h4 className="font-bold text-slate-900 dark:text-white mt-4">Sådan bruger du den:</h4>
+                      <ul className="list-disc pl-5 space-y-2">
+                        <li>Skriv det svære ord ind og vælg din klasse.</li>
+                        <li>Få en nem forklaring, et godt eksempel og en sjov sammenligning.</li>
+                        <li>Tag den lille quiz i bunden for at se, om du har forstået ordet.</li>
+                        <li>Hvis det stadig er for svært, så tryk på knappen <strong>"Gør det meget simplere"</strong>.</li>
+                      </ul>
+                    </>
+                  )}
+
+                  {infoModal === 'forælder' && (
+                    <>
+                      <p className="text-lg font-medium text-indigo-600 dark:text-indigo-400">Støt dit barns læring med ro i maven.</p>
+                      <p>Det kan sommetider være en udfordring at hjælpe med lektierne, især når fagbøgerne bruger svære begreber, som man måske selv har glemt betydningen af. Begrebsforklareren er et trygt og kvalitetssikret værktøj, der hjælper jer på vej.</p>
+                      <h4 className="font-bold text-slate-900 dark:text-white mt-4">Formålet med værktøjet:</h4>
+                      <p>Formålet er at bygge bro mellem skole og hjem. Værktøjet giver letforståelige forklaringer på faglige begreber, som er nøje tilpasset dit barns specifikke klassetrin, så I undgår forvirring.</p>
+                      <h4 className="font-bold text-slate-900 dark:text-white mt-4">Gode brugsscenarier:</h4>
+                      <ul className="list-disc pl-5 space-y-2">
+                        <li><strong>Ved lektielæsning:</strong> Slå de svære ord op sammen. Oplæsningsfunktionen og ordblinde-tilstanden gør det let for alle at være med.</li>
+                        <li><strong>Samtale og dialog:</strong> Brug appens "Analogi" (sammenligninger) til at starte en snak om emnet ved spisebordet.</li>
+                        <li><strong>Test forståelsen:</strong> Lad dit barn tage den indbyggede "Miniquiz" for at tjekke, om begrebet sidder fast. Hvis ikke, kan I bruge chatten i bunden til at spørge ind til detaljerne.</li>
+                      </ul>
+                      <div className="bg-blue-50 dark:bg-blue-900/30 p-4 rounded-xl mt-4 border border-blue-100 dark:border-blue-800/50 text-sm">
+                        💡 <strong>Tryghed:</strong> AI-motoren bag værktøjet er instrueret i ikke at hallucinere eller finde på nye ord, så I kan stole på den faglige kvalitet.
+                      </div>
+                    </>
+                  )}
+
+                  {infoModal === 'lærer' && (
+                    <>
+                      <p className="text-lg font-medium text-indigo-600 dark:text-indigo-400">Et fagligt stærkt støtteværktøj til din undervisning.</p>
+                      <p>Velkommen til Begrebsforklareren – et avanceret, AI-drevet værktøj udviklet specifikt til at støtte den danske folkeskole. Værktøjet fokuserer på faglig præcision og undervisningsdifferentiering.</p>
+                      <h4 className="font-bold text-slate-900 dark:text-white mt-4">Pædagogiske mål:</h4>
+                      <p>At understøtte inklusion og niveaudeling. Ved at tilbyde skræddersyede forklaringer og multisensoriske muligheder (oplæsning og ordblinde-visning), kan alle elever tilegne sig fagbegreber uafhængigt af deres aktuelle læseniveau.</p>
+                      <h4 className="font-bold text-slate-900 dark:text-white mt-4">Hvordan du kan bruge det i din praksis:</h4>
+                      <ul className="list-disc pl-5 space-y-2">
+                        <li><strong>Del links:</strong> Forbered lektionen ved at slå et ord op og brug knappen "Del link". Læg linket på Aula eller i din præsentation, så eleverne lander direkte på den færdige forklaring.</li>
+                        <li><strong>Lav opgaveark:</strong> Brug funktionen "Kopiér til Word" for lynhurtigt at hente forklaringer, eksempler og quiz-spørgsmål over i dine egne materialer.</li>
+                        <li><strong>Skab infografik:</strong> Brug værktøjets indbyggede prompts til at generere flotte, visuelle forklaringer i systemer som Canva, Midjourney eller Copilot.</li>
+                        <li><strong>Tid til fordybelse:</strong> Frigiv tid i klasserummet. Lad eleverne bruge "Spørg om mere"-chatten til de umiddelbare afklaringsspørgsmål, så du kan fokusere på den dybere faglige sparring.</li>
+                      </ul>
+                    </>
+                  )}
+                </div>
+                <div className="p-6 border-t border-slate-100 dark:border-petroleum-700 bg-slate-50/50 dark:bg-petroleum-900/50 flex justify-end transition-colors">
+                  <button onClick={() => setInfoModal(null)} className="px-6 py-2 bg-slate-800 dark:bg-indigo-600 text-white rounded-xl hover:bg-slate-900 dark:hover:bg-indigo-700 transition-colors font-medium">
+                    Luk
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Infografik Modal */}
+          {showInfographicModal && result && result.infografik_prompt && (
+            <div className="fixed inset-0 bg-slate-900/40 dark:bg-slate-900/70 backdrop-blur-sm flex items-center justify-center z-50 p-4 print:hidden transition-colors" onClick={() => setShowInfographicModal(false)}>
+              <div className="bg-white dark:bg-petroleum-800 rounded-3xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col transition-colors" onClick={e => e.stopPropagation()}>
+                <div className="p-6 border-b border-slate-100 dark:border-petroleum-700 flex justify-between items-center bg-slate-50/50 dark:bg-petroleum-900/50 transition-colors">
+                  <h3 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">🖼️ Lav en infografik</h3>
+                  <button onClick={() => setShowInfographicModal(false)} className="text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 p-2 rounded-full hover:bg-slate-100 dark:hover:bg-petroleum-700 transition-colors">
+                    ❌
+                  </button>
+                </div>
+                <div className="p-6 overflow-y-auto max-h-[80vh]">
+                  <p className="text-slate-600 dark:text-slate-300 text-sm mb-3">
+                    Her er en engelsk prompt, der beskriver analogien. Kopier den og sæt den ind i dit foretrukne billed-AI-værktøj for at generere en flot infografik.
+                  </p>
+                  <div className="bg-slate-100 dark:bg-petroleum-900 p-4 rounded-2xl text-sm font-mono text-slate-700 dark:text-slate-300 mb-6 border border-slate-200 dark:border-petroleum-700 transition-colors">
+                    {result.infografik_prompt}
+                  </div>
+                  
+                  <button 
+                    onClick={handleCopyInfografik}
+                    className="w-full py-3 px-4 mb-8 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold shadow-sm transition-all flex items-center justify-center gap-2"
+                  >
+                    📋 {infografikCopyStatus || 'Kopier prompt til infografik'}
+                  </button>
+
+                  <h4 className="font-bold text-slate-900 dark:text-white mb-3">Åbn billedgenerator:</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <a href="https://www.skoletube.dk/login?returnurl=https://www.skoletube.dk/app/canva" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 p-3 rounded-xl border border-slate-200 dark:border-petroleum-700 hover:border-indigo-400 dark:hover:border-petroleum-700 hover:bg-indigo-50 dark:hover:bg-petroleum-700 transition-colors text-slate-700 dark:text-slate-300 font-medium text-sm">
+                      <span className="text-xl">🎒</span> Skoletube (Canva)
+                    </a>
+                    <a href="https://gemini.google.com/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 p-3 rounded-xl border border-slate-200 dark:border-petroleum-700 hover:border-indigo-400 dark:hover:border-petroleum-700 hover:bg-indigo-50 dark:hover:bg-petroleum-700 transition-colors text-slate-700 dark:text-slate-300 font-medium text-sm">
+                      <span className="text-xl">✨</span> Google Gemini
+                    </a>
+                    <a href="https://chatgpt.com/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 p-3 rounded-xl border border-slate-200 dark:border-petroleum-700 hover:border-indigo-400 dark:hover:border-petroleum-700 hover:bg-indigo-50 dark:hover:bg-petroleum-700 transition-colors text-slate-700 dark:text-slate-300 font-medium text-sm">
+                      <span className="text-xl">🤖</span> ChatGPT
+                    </a>
+                    <a href="https://copilot.microsoft.com/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 p-3 rounded-xl border border-slate-200 dark:border-petroleum-700 hover:border-indigo-400 dark:hover:border-petroleum-700 hover:bg-indigo-50 dark:hover:bg-petroleum-700 transition-colors text-slate-700 dark:text-slate-300 font-medium text-sm">
+                      <span className="text-xl">💻</span> Microsoft Copilot
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       );
     }
