@@ -393,9 +393,9 @@ VIGTIGT: Du SKAL svare med et validt JSON-objekt i præcis dette format, og inte
 
           const userPrompt = `Forklar begreb: "${termToExplain}". Fag: "${activeFag}". Målgruppe: Elev i "${activeKlassetrin}".`;
 
-          const response = await fetch('https://llm.dbc.dk/v1/chat/completions', {
+          const response = await fetch('https://https://begrebsforklarer-proxy.awmeister.workers.dev/', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer sk-bv73cufkhv7wt5t7zf6' },
+            headers: { 'Content-Type': 'application/json' }, // Læg mærke til at Authorization-headeren er fjernet!
             body: JSON.stringify({
               model: "skolegpt-v3",
               messages: [ { role: "system", content: systemPrompt }, { role: "user", content: userPrompt } ],
