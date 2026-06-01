@@ -41,7 +41,7 @@
   <!-- Babel til at oversætte JSX i browseren -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
-<body class="font-sans selection:bg-indigo-100 selection:text-indigo-900 dark:selection:bg-petroleum-700 dark:selection:text-white">
+<body class="font-sans selection:bg-indigo-100 selection:text-indigo-900 dark:selection:bg-petroleum-700 dark:selection:text-white transition-colors duration-300">
   <div id="root"></div>
 
   <script type="text/babel">
@@ -73,7 +73,7 @@
 
     const FAG_LIST = Object.keys(FAG_KLASSETRIN_MAP);
 
-    // Hjælpefunktioner til live-parsing af ufærdig JSON
+    // Hjælpefunktioner til live-parsing af ufærdig JSON under streaming
     const extractStringField = (str, key) => {
       const marker = `"${key}"`;
       const start = str.indexOf(marker);
@@ -393,9 +393,10 @@ VIGTIGT: Du SKAL svare med et validt JSON-objekt i præcis dette format, og inte
 
           const userPrompt = `Forklar begreb: "${termToExplain}". Fag: "${activeFag}". Målgruppe: Elev i "${activeKlassetrin}".`;
 
-          const response = await fetch('https://https://begrebsforklarer-proxy.awmeister.workers.dev/', {
+          // Kald til Cloudflare Worker (I stedet for direkte til DBC)
+          const response = await fetch('https://begrebsforklarer-proxy.awmeister.workers.dev/', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' }, // Læg mærke til at Authorization-headeren er fjernet!
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               model: "skolegpt-v3",
               messages: [ { role: "system", content: systemPrompt }, { role: "user", content: userPrompt } ],
@@ -443,9 +444,10 @@ VIGTIGT: Du SKAL svare med et validt JSON-objekt i præcis dette format, og inte
           const systemPrompt = "Du er en pædagogisk skolelærer. Din opgave er KUN at omskrive en lille del af en begrebsforklaring, så eleven får en NY vinkel. Svar KUN med den nye tekst - absolut ingen formatering, ingen markdown, intet JSON, kun den rene tekst.";
           const userPrompt = `Vi taler om begrebet "${begreb}" (${fag}, ${klassetrin}). Skriv en NY, KORT og ANDERLEDES version af denne sektion: '${promptLabel}'. Den tidligere tekst var: "${result[sectionKey]}". Skriv den nye version nu:`;
 
-          const response = await fetch('https://llm.dbc.dk/v1/chat/completions', {
+          // Kald til Cloudflare Worker (I stedet for direkte til DBC)
+          const response = await fetch('https://begrebsforklarer-proxy.awmeister.workers.dev/', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer sk-bv73cufkhv7wt5t7zf6' },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               model: "skolegpt-v3",
               messages: [ { role: "system", content: systemPrompt }, { role: "user", content: userPrompt } ],
@@ -479,9 +481,10 @@ VIGTIGT: Du SKAL svare med et validt JSON-objekt i præcis dette format, og inte
           const systemPrompt = "Du er en pædagogisk skolelærer. Svar kort, direkte og i øjenhøjde på elevens spørgsmål baseret på den igangværende samtale.";
           const userPrompt = `Kontekst: Vi har lige lært om begrebet "${begreb}" i ${fag}. Eleven spørger: "${followUpQuestion}". Svar på spørgsmålet:`;
 
-          const response = await fetch('https://llm.dbc.dk/v1/chat/completions', {
+          // Kald til Cloudflare Worker (I stedet for direkte til DBC)
+          const response = await fetch('https://begrebsforklarer-proxy.awmeister.workers.dev/', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer sk-bv73cufkhv7wt5t7zf6' },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               model: "skolegpt-v3",
               messages: [ { role: "system", content: systemPrompt }, { role: "user", content: userPrompt } ],
@@ -830,9 +833,9 @@ VIGTIGT: Du SKAL svare med et validt JSON-objekt i præcis dette format, og inte
               <div className="bg-white dark:bg-petroleum-800 rounded-3xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col transition-colors" onClick={e => e.stopPropagation()}>
                 <div className="p-6 border-b border-slate-100 dark:border-petroleum-700 flex justify-between items-center bg-slate-50/50 dark:bg-petroleum-900/50 transition-colors">
                   <h3 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                    {infoModal === 'elev' && '👦 For dig som er elev'}
-                    {infoModal === 'forælder' && '👨‍👩‍👧 For jer som er forældre'}
-                    {infoModal === 'lærer' && '👩‍🏫 For dig som er lærer'}
+                    {infoModal === 'elev' && 'For dig som er elev'}
+                    {infoModal === 'forælder' && 'For jer som er forældre'}
+                    {infoModal === 'lærer' && 'For dig som er lærer'}
                   </h3>
                   <button onClick={() => setInfoModal(null)} className="text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 p-2 rounded-full hover:bg-slate-100 dark:hover:bg-petroleum-700 transition-colors">
                     ❌
@@ -903,7 +906,7 @@ VIGTIGT: Du SKAL svare med et validt JSON-objekt i præcis dette format, og inte
             <div className="fixed inset-0 bg-slate-900/40 dark:bg-slate-900/70 backdrop-blur-sm flex items-center justify-center z-50 p-4 print:hidden transition-colors" onClick={() => setShowInfographicModal(false)}>
               <div className="bg-white dark:bg-petroleum-800 rounded-3xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col transition-colors" onClick={e => e.stopPropagation()}>
                 <div className="p-6 border-b border-slate-100 dark:border-petroleum-700 flex justify-between items-center bg-slate-50/50 dark:bg-petroleum-900/50 transition-colors">
-                  <h3 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">🖼️ Lav en infografik</h3>
+                  <h3 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">Lav en infografik</h3>
                   <button onClick={() => setShowInfographicModal(false)} className="text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 p-2 rounded-full hover:bg-slate-100 dark:hover:bg-petroleum-700 transition-colors">
                     ❌
                   </button>
@@ -926,16 +929,16 @@ VIGTIGT: Du SKAL svare med et validt JSON-objekt i præcis dette format, og inte
                   <h4 className="font-bold text-slate-900 dark:text-white mb-3">Åbn billedgenerator:</h4>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <a href="https://www.skoletube.dk/login?returnurl=https://www.skoletube.dk/app/canva" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 p-3 rounded-xl border border-slate-200 dark:border-petroleum-700 hover:border-indigo-400 dark:hover:border-petroleum-700 hover:bg-indigo-50 dark:hover:bg-petroleum-700 transition-colors text-slate-700 dark:text-slate-300 font-medium text-sm">
-                      <span className="text-xl">🎒</span> Skoletube (Canva)
+                      Skoletube (Canva)
                     </a>
                     <a href="https://gemini.google.com/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 p-3 rounded-xl border border-slate-200 dark:border-petroleum-700 hover:border-indigo-400 dark:hover:border-petroleum-700 hover:bg-indigo-50 dark:hover:bg-petroleum-700 transition-colors text-slate-700 dark:text-slate-300 font-medium text-sm">
-                      <span className="text-xl">✨</span> Google Gemini
+                      Google Gemini
                     </a>
                     <a href="https://chatgpt.com/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 p-3 rounded-xl border border-slate-200 dark:border-petroleum-700 hover:border-indigo-400 dark:hover:border-petroleum-700 hover:bg-indigo-50 dark:hover:bg-petroleum-700 transition-colors text-slate-700 dark:text-slate-300 font-medium text-sm">
-                      <span className="text-xl">🤖</span> ChatGPT
+                      ChatGPT
                     </a>
                     <a href="https://copilot.microsoft.com/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 p-3 rounded-xl border border-slate-200 dark:border-petroleum-700 hover:border-indigo-400 dark:hover:border-petroleum-700 hover:bg-indigo-50 dark:hover:bg-petroleum-700 transition-colors text-slate-700 dark:text-slate-300 font-medium text-sm">
-                      <span className="text-xl">💻</span> Microsoft Copilot
+                      Microsoft Copilot
                     </a>
                   </div>
                 </div>
